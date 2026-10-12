@@ -9,6 +9,7 @@
 ![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-SharePoint-0078D4?logo=microsoft&logoColor=white)
 ![Teams](https://img.shields.io/badge/Teams-Power%20Automate-6264A7?logo=microsoftteams&logoColor=white)
 ![Status](https://img.shields.io/badge/status-production-success)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 </div>
 
@@ -124,3 +125,7 @@ Click **Manual Trigger (Test)**. It simulates `acme_handover 2026-03-17 evening`
 ## Security
 
 This export has been redacted. It contains no tokens, secrets, tenant, site or workbook IDs, channel IDs, email addresses or real client names. Never commit a live n8n export. If a token was ever hardcoded in an exported workflow, rotate it.
+
+## License
+
+[MIT](LICENSE) © 2026 Rana Talha
