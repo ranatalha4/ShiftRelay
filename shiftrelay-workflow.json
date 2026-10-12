@@ -1,0 +1,399 @@
+{
+  "name": "ShiftRelay",
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": [
+          "message"
+        ],
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_COMMAND_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "soc-handover-commands"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "id": "node-slack-trigger",
+      "name": "Slack Trigger",
+      "webhookId": "REDACTED_WEBHOOK_ID",
+      "credentials": {
+        "slackApi": {
+          "id": "REDACTED_CRED_ID",
+          "name": "Slack API Credential"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        520
+      ],
+      "id": "node-manual-trigger-test",
+      "name": "Manual Trigger (Test)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simulates the Slack command so you can test without Slack.\nreturn [{ json: { text: 'acme_handover 2026-03-17 evening' } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        520
+      ],
+      "id": "node-test-command",
+      "name": "Test Command"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Expected: acme_handover <YYYY-MM-DD> [morning|evening|night]\nconst messageText = $json.text || $json.blocks?.[0]?.elements?.[0]?.elements?.[0]?.text || \"\";\nconst parts = messageText.trim().split(/\\s+/);\nconst COMMAND = \"acme_handover\";\n\nif (parts[0] !== COMMAND) return [];            // ignore other messages\n\nconst date = /^\\d{4}-\\d{2}-\\d{2}$/.test(parts[1] || \"\") ? parts[1] : \"\";\nif (!date) throw new Error(`Usage: ${COMMAND} YYYY-MM-DD [morning|evening|night]`);\n\nconst validShifts = [\"morning\", \"evening\", \"night\"];\nconst shift = validShifts.includes((parts[2] || \"\").toLowerCase()) ? parts[2].toLowerCase() : \"evening\";\n\nreturn [{ json: { date, shift, client: \"acme\" } }];\n"
+      },
+      "id": "node-parse-command",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_SECRETS_SUBWORKFLOW_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        300
+      ],
+      "id": "node-get-secrets",
+      "name": "Get Secrets"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Output of the secrets sub-workflow, e.g.\n// { \"sharepoint\": { \"client_secret\": \"...\", \"application_client_ID\": \"...\" } }\nconst raw = $input.first().json.result;\nlet parsed;\ntry {\n  parsed = typeof raw === 'string' ? JSON.parse(raw.replace(/,(\\s*[}\\]])/g, '$1')) : raw;\n} catch (err) {\n  throw new Error('Secrets JSON parsing failed: ' + err.message);\n}\nreturn [{ json: { sp_client_secret: parsed?.sharepoint?.client_secret } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "node-parse-secrets",
+      "name": "Parse Secrets"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://login.microsoftonline.com/YOUR_TENANT_ID/oauth2/v2.0/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "client_credentials"
+            },
+            {
+              "name": "client_id",
+              "value": "YOUR_SHAREPOINT_APP_CLIENT_ID"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $json.sp_client_secret }}"
+            },
+            {
+              "name": "scope",
+              "value": "https://graph.microsoft.com/.default"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "id": "node-get-graph-token",
+      "name": "Get Graph Token"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === Build the Microsoft Graph URL for Acme's handover workbook ===\n// Workbook item ID: open the file in SharePoint → Details, or GET /drives/{drive-id}/root/children\nconst itemId = 'YOUR_WORKBOOK_ITEM_ID';\n\nconst rawShift = String($('Parse Command').first().json.shift ?? '').trim();\nconst shift = rawShift.toLowerCase();\nconst shiftDisplay = shift.charAt(0).toUpperCase() + shift.slice(1);\nconst date = String($('Parse Command').first().json.date ?? '').trim();\nconst accessToken = $('Get Graph Token').first().json.access_token;\n\nconst url = `https://graph.microsoft.com/v1.0/sites/yourtenant.sharepoint.com,YOUR_SITE_COLLECTION_ID,YOUR_SITE_ID/drives/YOUR_DRIVE_ID/items/${itemId}/workbook/worksheets('Handover_Sheet')/range(address='A1:Q200')?$select=values`;\n\nreturn [{ json: { url, shift, shiftDisplay, date, accessToken } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "id": "node-build-sheet-url",
+      "name": "Build Sheet URL"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.accessToken }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "id": "node-fetch-handover-sheet",
+      "name": "Fetch Handover Sheet"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === Acme: convert Excel serial dates in column C to YYYY-MM-DD ===\n// Only converts real serial numbers; dates already typed as text (2026-10-02) are left intact.\nfunction convertExcelDate(excelNumber) {\n  const baseDate = new Date(Date.UTC(1899, 11, 30));\n  return new Date(baseDate.getTime() + excelNumber * 86400000).toISOString().split('T')[0];\n}\nreturn items.map(item => {\n  const values = Array.isArray(item.json.values) ? item.json.values : [];\n  const dateColumnIndex = 2;\n  const formattedValues = values.map(row => {\n    const newRow = [...row];\n    const cell = row[dateColumnIndex];\n    const isSerial = typeof cell === 'number' || /^\\d+(\\.\\d+)?$/.test(String(cell ?? '').trim());\n    if (isSerial && String(cell).trim() !== '') newRow[dateColumnIndex] = convertExcelDate(parseFloat(cell));\n    return newRow;\n  });\n  return { json: { ...item.json, values: formattedValues } };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "id": "node-convert-excel-dates",
+      "name": "Convert Excel Dates"
+    },
+    {
+      "parameters": {
+        "jsCode": "// === Acme Formatter ===\n// Output layout: Alert Details -> SOC Analysis Summary -> Shift Handover.\n// Data sources are grouped automatically from column D, so no code change is needed\n// when Acme's tools change.\nconst inputData = $input.first().json;\nconst code1 = $('Build Sheet URL').first().json;\nconst shiftDisplay = String(code1.shiftDisplay ?? '').trim();\nconst targetDate = String(code1.date ?? '').split('T')[0];\nconst maxLength = 3900;\n\nconst slackUserGroupMentions = {\n  morning: '<!subteam^YOUR_GROUP_ID|soc-morning-shift>',\n  evening: '<!subteam^YOUR_GROUP_ID|soc-evening-shift>',\n  night: '<!subteam^YOUR_GROUP_ID|soc-night-shift>'\n};\n// Shift end times: set to your SOC's schedule and time zone\nconst shiftEndTimes = {\n  morning: '16:00 (local)',\n  evening: '00:00 (local)',\n  night: '08:00 (local)'\n};\nconst nextShift = { morning: 'evening', evening: 'night', night: 'morning' };\nconst shiftKey = shiftDisplay.toLowerCase();\nconst handoverTag = slackUserGroupMentions[nextShift[shiftKey] || 'morning'];\nconst shiftEndTime = shiftEndTimes[shiftKey] || '08:00 (local)';\n\nfunction clean(text) {\n  return String(text ?? '')\n    .replace(/^\"|\"$/g, '')\n    .replace(/```/g, '')\n    .replace(/\\u200b/g, '')\n    .replace(/\\u00A0/g, ' ')\n    .replace(/\\t/g, ' ')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\r/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\nconst pad = n => String(n).padStart(2, '0');\n\nconst values = Array.isArray(inputData.values) ? inputData.values : [];\nconst [, ...rows] = values;\n\nconst sources = {};          // grouped by column D (datasource)\nconst sourceOrder = [];\nfunction getSource(name) {\n  if (!sources[name]) {\n    sources[name] = { alerts: 0, tp: 0, pending: 0, tickets: new Set(),\n                      sev: { critical: 0, high: 0, medium: 0, low: 0 }, titles: [] };\n    sourceOrder.push(name);\n  }\n  return sources[name];\n}\n\nconst seen = new Set();\nconst highPriorityPending = [];\nconst allTickets = [];\nconst alertBlocks = [];\nconst recommendations = [];\nlet totalAlerts = 0;\nlet alertIndex = 1;\n\nrows.forEach(alert => {\n  const title = clean(alert[5]);\n  if (!title) return;\n\n  const shift = String(alert[0] ?? '').trim().toLowerCase();\n  const date = String(alert[2] ?? '').trim().split('T')[0];\n  if (shift !== shiftKey || date !== targetDate) return;\n\n  // De-dup on title + alert ID (two different alerts with the same title are both kept)\n  const alertId = clean(alert[4]);\n  const key = `${title}|${alertId}`.toLowerCase();\n  if (seen.has(key)) return;\n  seen.add(key);\n\n  const sourceName = clean(alert[3]) || 'Unspecified';\n  const parsedCount = parseInt(alert[10], 10);\n  const alertCount = isNaN(parsedCount) || parsedCount < 1 ? 1 : parsedCount;\n  const severity = String(alert[11] ?? 'medium').trim().toLowerCase();\n  const analysisStatus = String(alert[13] ?? '').trim().toLowerCase();\n  const ticketId = clean(alert[15]);\n\n  const isTP = ['true positive', 'tp', 'truepositive'].includes(analysisStatus);\n  const isPending = ['pending', 'in progress', '', 'under analysis'].includes(analysisStatus);\n\n  const src = getSource(sourceName);\n  totalAlerts += alertCount;\n  src.alerts += alertCount;\n  if (isTP) src.tp++;\n  if (isPending) src.pending++;\n  if (src.sev[severity] !== undefined) src.sev[severity]++;\n  src.titles.push(title);\n\n  const hasTicket = ticketId && ticketId.toLowerCase() !== 'none';\n  if (hasTicket) {\n    src.tickets.add(ticketId);\n    if (!allTickets.includes(ticketId)) allTickets.push(ticketId);\n  }\n\n  if ((severity === 'high' || severity === 'critical') && isPending) highPriorityPending.push(title);\n\n  const description = clean(alert[6]);\n  const actionItem = clean(alert[16]);\n  if (actionItem && actionItem.toLowerCase() !== 'none') {\n    const formatted = `• ${actionItem}`;\n    if (!recommendations.some(r => r.toLowerCase() === formatted.toLowerCase())) recommendations.push(formatted);\n  }\n\n  const block = [\n    `${alertIndex++}- ${title}`,\n    `Alert ID(s): ${alertId || 'N/A'}`,\n    `Priority: ${clean(alert[11]) || 'N/A'}`,\n    `Alert Status: ${clean(alert[12]) || 'N/A'}`,\n    `Analysis Status: ${clean(alert[13]) || 'N/A'}`,\n    `Ticket ID: ${hasTicket ? ticketId : 'None'}`,\n    `Alerts Count: ${alertCount}`,\n    `First Activity: ${clean(alert[7]) || 'N/A'}`,\n    `Last Activity: ${clean(alert[8]) || 'N/A'}`,\n    '',\n    `Details:\\n${description || 'N/A'}`,\n    '',\n    `Action Items & Recommendations:\\n${actionItem || 'None'}`\n  ].join('\\n');\n  alertBlocks.push('```\\n' + block + '\\n```');\n});\n\n// Stop instead of posting an all-zero report to the client channel\nif (alertBlocks.length === 0) {\n  throw new Error(`Acme: no rows in Handover_Sheet match date=${targetDate} shift=${shiftDisplay}. Check columns A and C in the sheet and the date/shift in the command.`);\n}\n\n// === Summary ===\nlet summary = `*SOC Analysis Summary - ${targetDate} ---* \\`${shiftDisplay}\\`\\n`;\nsummary += `*Total Investigated Alerts:* \\`${pad(totalAlerts)}\\`\\n`;\nfor (const name of sourceOrder) {\n  const s = sources[name];\n  summary += `\\n*${name}*\\n`;\n  summary += `*Alerts Investigated:* \\`${pad(s.alerts)}\\`\\n`;\n  summary += `\\`--TP: ${s.tp}\\`\\n`;\n  summary += `\\`--Severity: C: ${pad(s.sev.critical)} | H: ${pad(s.sev.high)} | M: ${pad(s.sev.medium)} | L: ${pad(s.sev.low)}\\`\\n`;\n  summary += `\\`--Tickets Created/Updated: ${pad(s.tickets.size)}\\`\\n`;\n}\n\n// === Handover ===\nconst totalPending = sourceOrder.reduce((n, k) => n + sources[k].pending, 0);\nlet handover = `*Shift Handover*\\n`;\nhandover += `*----------------------------------------------------*\\n`;\nhandover += `*Incident Pending ${totalPending} till ${shiftEndTime}*\\n`;\nhandover += `*----------------------------------------------------*\\n\\n`;\n\nhandover += `\\`Tickets & Updates:\\`\\n`;\nhandover += allTickets.length ? allTickets.map(t => `• \\`${t}\\``).join('\\n') + '\\n' : `• None\\n`;\n\nhandover += `\\n\\`Investigations:\\`\\n`;\nsourceOrder.forEach(k => sources[k].titles.forEach(t => { handover += `• ${t}\\n`; }));\n\nhandover += `\\n\\`Pending Items:\\`\\n• None\\n`;\nhandover += `\\n\\`Blockers:\\`\\n• None\\n`;\nhandover += `\\n\\`High Priority:\\`\\n`;\nhandover += highPriorityPending.length ? highPriorityPending.map(t => `• ${t}`).join('\\n') + '\\n' : `• None\\n`;\nhandover += `\\n\\`SOC Health Status\\`\\n• Normal\\n`;\nif (recommendations.length) handover += `\\n\\`Recommendations:\\`\\n${recommendations.join('\\n')}\\n`;\nhandover += `\\nCC: ${handoverTag}`;\n\n// === Chunk for Slack ===\nconst result = [];\nfunction pushChunked(text) {\n  let current = '';\n  for (const line of text.split('\\n')) {\n    if ((current + '\\n' + line).length > maxLength) {\n      if (current.trim()) result.push({ json: { slackChunk: current.trim() } });\n      current = line;\n    } else {\n      current += '\\n' + line;\n    }\n  }\n  if (current.trim()) result.push({ json: { slackChunk: current.trim() } });\n}\n\nlet alertChunk = '*Alert Details*';\nfor (const block of alertBlocks) {\n  if ((alertChunk + '\\n\\n' + block).length > maxLength) {\n    result.push({ json: { slackChunk: alertChunk.trim() } });\n    alertChunk = block;\n  } else {\n    alertChunk += '\\n\\n' + block;\n  }\n}\nif (alertChunk.trim()) result.push({ json: { slackChunk: alertChunk.trim() } });\n\npushChunked(summary);\npushChunked(handover);\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "id": "node-format-summary",
+      "name": "Format Summary"
+    },
+    {
+      "parameters": {
+        "channel": "acme-soc",
+        "text": "={{ $json.slackChunk }}",
+        "otherOptions": {},
+        "attachments": []
+      },
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        200
+      ],
+      "id": "node-post-to-slack",
+      "credentials": {
+        "slackApi": {
+          "id": "REDACTED_CRED_ID",
+          "name": "Slack API Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// === Teams Format Acme ===\n// Converts the Slack chunks from Formatter Acme into ONE Teams HTML message\n// { subject, html } for the Power Automate flow (posts as your SOC account).\n// Teams gets: Alert Details + SOC Analysis Summary (no Shift Handover).\n// Mode: Run Once for All Items (default).\n\nconst chunks = $input.all().map(i => String(i.json.slackChunk ?? '')).filter(Boolean);\nconst code1 = $('Build Sheet URL').first().json;\nconst subject = `SOC Analysis Summary - ${code1.date} ${code1.shiftDisplay}`;\n\nconst esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nfunction inline(line) {\n  let t = line.replace(/<!subteam\\^[A-Z0-9]+\\|([^>]+)>/g, '@$1'); // Slack group tag -> @name\n  t = esc(t);\n  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');                  // `x` -> code box\n  t = t.replace(/\\*([^*\\n]+)\\*/g, '<b>$1</b>');                    // *x* -> bold\n  return t;\n}\n\nfunction chunkToHtml(chunk) {\n  return chunk.split('```').map((seg, i) => {\n    seg = seg.replace(/^\\n|\\n$/g, '');\n    if (i % 2 === 1) return `<pre>${esc(seg)}</pre>`;               // alert block\n    return seg.split('\\n').map(inline).join('<br>');\n  }).join('');\n}\n\n// Drop the Shift Handover section (it and every chunk after it)\nconst handoverIdx = chunks.findIndex(c => c.startsWith('*Shift Handover'));\nconst selected = handoverIdx === -1 ? chunks : chunks.slice(0, handoverIdx);\n\nconst html = selected\n  // Remove the summary title line (already shown as the Teams subject)\n  .map(c => c.replace(/^\\*SOC Analysis Summary - [^\\n]*\\n?/, ''))\n  .map(chunkToHtml)\n  .filter(h => h.trim())\n  .join('<hr>');\nif (!html.trim()) throw new Error('Teams: no content found - nothing to post.');\n\nif (html.length > 27000) {\n  throw new Error(`Teams message is ${html.length} chars; Teams limit is ~28 KB. Too many alerts for one post.`);\n}\nreturn [{ json: { subject, html, bytes: html.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        420
+      ],
+      "id": "node-format-for-teams",
+      "name": "Format for Teams"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_POWER_AUTOMATE_FLOW_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ subject: $json.subject, html: $json.html }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        420
+      ],
+      "id": "node-post-to-teams",
+      "name": "Post to Teams"
+    }
+  ],
+  "connections": {
+    "Slack Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Command": {
+      "main": [
+        [
+          {
+            "node": "Get Secrets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Secrets": {
+      "main": [
+        [
+          {
+            "node": "Parse Secrets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Secrets": {
+      "main": [
+        [
+          {
+            "node": "Get Graph Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Graph Token": {
+      "main": [
+        [
+          {
+            "node": "Build Sheet URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Sheet URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch Handover Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Handover Sheet": {
+      "main": [
+        [
+          {
+            "node": "Convert Excel Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Excel Dates": {
+      "main": [
+        [
+          {
+            "node": "Format Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger (Test)": {
+      "main": [
+        [
+          {
+            "node": "Test Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Command": {
+      "main": [
+        [
+          {
+            "node": "Parse Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Summary": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Format for Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Teams": {
+      "main": [
+        [
+          {
+            "node": "Post to Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}
